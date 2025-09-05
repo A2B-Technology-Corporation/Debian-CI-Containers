@@ -14,7 +14,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/debian-ci
+  # Docker requires lowercase repository names
+  IMAGE_NAME: a2b-technology-corporation/debian-ci
 
 jobs:
   build-and-push:
