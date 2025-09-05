@@ -1,0 +1,90 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'debian-*/Dockerfile'
+      - '.github/workflows/build-and-push.yml'
+  schedule:
+    # Weekly rebuild for security updates (Sunday at 2 AM UTC)
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/debian-ci
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        version: [12, 13]
+        include:
+          - version: 12
+            debian_name: bookworm
+          - version: 13
+            debian_name: trixie
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ matrix.version }}
+            type=raw,value=${{ matrix.debian_name }}
+            type=raw,value=${{ matrix.version }}-{{date 'YYYYMMDD'}}
+            type=raw,value=latest,enable=${{ matrix.version == 13 }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./debian-${{ matrix.version }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  test-images:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        version: [12, 13]
+    
+    steps:
+      - name: Test container image
+        run: |
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.version }} bash -c "
+            echo '=== Testing Debian ${{ matrix.version }} container ===' &&
+            echo 'Debian version:' && cat /etc/debian_version &&
+            echo 'Git version:' && git --version &&
+            echo 'Python version:' && python3 --version &&
+            echo 'Node.js version:' && node --version &&
+            echo 'Ansible version:' && ansible --version | head -1 &&
+            echo 'yq version:' && yq --version &&
+            echo 'GitHub CLI version:' && gh --version &&
+            echo '=== All tools verified ==='
+          "
